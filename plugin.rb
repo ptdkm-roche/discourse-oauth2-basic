@@ -187,7 +187,7 @@ class OAuth2BasicAuthenticator < Auth::ManagedAuthenticator
       end
     end
 
-    download_avatar(result.user, avatar_url)
+    # download_avatar(result.user, avatar_url)
 
     result.extra_data = { oauth2_basic_user_id: user_details[:user_id], avatar_url: avatar_url }
 
