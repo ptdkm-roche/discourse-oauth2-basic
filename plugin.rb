@@ -160,23 +160,38 @@ class OAuth2BasicAuthenticator < Auth::ManagedAuthenticator
   def after_authenticate(auth, existing_account: nil)
     log("after_authenticate response: \n\ncreds: #{auth['credentials'].to_hash}\nuid: #{auth['uid']}\ninfo: #{auth['info'].to_hash}\nextra: #{auth['extra'].to_hash}")
 
-    if SiteSetting.oauth2_fetch_user_details?
-      if fetched_user_details = fetch_user_details(auth['credentials']['token'], auth['uid'])
-        auth['uid'] = fetched_user_details[:user_id] if fetched_user_details[:user_id]
-        auth['info']['nickname'] = fetched_user_details[:username] if fetched_user_details[:username]
-        auth['info']['image'] = fetched_user_details[:avatar] if fetched_user_details[:avatar]
-        ['name', 'email', 'email_verified'].each do |property|
-          auth['info'][property] = fetched_user_details[property.to_sym] if fetched_user_details[property.to_sym]
-        end
-      else
-        result = Auth::Result.new
-        result.failed = true
-        result.failed_reason = I18n.t("login.authenticator_error_fetch_user_details")
-        return result
+    result = Auth::Result.new
+    token = auth['credentials']['token']
+    user_details = fetch_user_details(token, auth['info'][:id])
+
+    result.name = user_details[:name]
+    result.username = user_details[:username]
+    result.email = user_details[:email]
+    result.email_valid = result.email.present? && SiteSetting.oauth2_email_verified?
+    avatar_url = user_details[:avatar]
+
+    current_info = ::PluginStore.get("oauth2_basic", "oauth2_basic_user_#{user_details[:user_id]}")
+    if current_info
+      result.user = User.where(id: current_info[:user_id]).first
+    elsif SiteSetting.oauth2_email_verified?
+      # --------------
+      if User.find_by_email(user_details[:email]).nil?
+        result.user = User.create(name: user_details[:name], email: user_details[:email], username: user_details[:username], active: true)
+        log("created user account")
+      end
+      # --------------
+
+      result.user = User.find_by_email(result.email)
+      if result.user && user_details[:user_id]
+        ::PluginStore.set("oauth2_basic", "oauth2_basic_user_#{user_details[:user_id]}", user_id: result.user.id)
       end
     end
 
-    super(auth, existing_account: existing_account)
+    download_avatar(result.user, avatar_url)
+
+    result.extra_data = { oauth2_basic_user_id: user_details[:user_id], avatar_url: avatar_url }
+
+    result
   end
 
   def enabled?
